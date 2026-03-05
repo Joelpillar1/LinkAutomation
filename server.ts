@@ -35,6 +35,8 @@ db.exec(`
     recurrence_pattern TEXT, -- 'daily', 'weekly', 'monthly'
     category TEXT DEFAULT 'General',
     is_draft INTEGER DEFAULT 0,
+    thumbnail_url TEXT,
+    media_urls TEXT, -- JSON array of strings
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
@@ -50,11 +52,20 @@ try {
   db.exec("ALTER TABLE posts ADD COLUMN is_draft INTEGER DEFAULT 0");
 }
 
+try {
+  db.prepare("SELECT thumbnail_url FROM posts LIMIT 1").get();
+} catch (e) {
+  console.log("Adding thumbnail and carousel columns to posts table...");
+  db.exec("ALTER TABLE posts ADD COLUMN thumbnail_url TEXT");
+  db.exec("ALTER TABLE posts ADD COLUMN media_urls TEXT");
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  app.use(express.json({ limit: "50mb" }));
+  app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
   // Request logging middleware
   app.use((req, res, next) => {
@@ -94,77 +105,140 @@ async function startServer() {
       }
 
       const registerData = await registerRes.json();
+      console.log("LinkedIn Register Upload Response:", JSON.stringify(registerData, null, 2));
       const uploadUrl = registerData.value.uploadMechanism["com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest"].uploadUrl;
       const asset = registerData.value.asset;
 
       // 2. Upload Binary
-      const buffer = Buffer.from(base64Image.replace(/^data:image\/\w+;base64,/, ""), "base64");
-      const uploadRes = await fetch(uploadUrl, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${accessToken}`,
-          "Content-Type": "image/png",
-        },
-        body: buffer,
-      });
+      const buffer = Buffer.from(base64Image.split(",")[1] || base64Image, "base64");
+      const mimeMatch = base64Image.match(/^data:([^;]+);base64,/);
+      const mimeType = mimeMatch ? mimeMatch[1] : "image/png";
+
+      console.log(`Uploading binary to: ${uploadUrl.substring(0, 100)}... (Size: ${buffer.length} bytes)`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 1 minute timeout
+
+      let uploadRes;
+      try {
+        uploadRes = await fetch(uploadUrl, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${accessToken}`,
+            "X-Restli-Protocol-Version": "2.0.0",
+            "Content-Type": "application/octet-stream",
+          },
+          body: buffer,
+          signal: controller.signal
+        });
+      } catch (fetchErr: any) {
+        if (fetchErr.name === 'AbortError') {
+          console.error("Binary upload timed out after 60s");
+          throw new Error("Upload timed out. The images might be too large or the connection is slow.");
+        }
+        console.error("Fetch implementation error during binary upload:", fetchErr);
+        throw new Error(`Connection failed during binary upload: ${fetchErr.message}`);
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (!uploadRes.ok) {
-        console.error("LinkedIn Binary Upload Error:", uploadRes.statusText);
-        throw new Error("Failed to upload image binary to LinkedIn.");
+        const errText = await uploadRes.text();
+        console.error("LinkedIn Binary Upload Error:", uploadRes.status, uploadRes.statusText, errText);
+        throw new Error(`Upload Failed with status ${uploadRes.status}: ${uploadRes.statusText}`);
       }
 
       return asset;
-    } catch (err) {
+    } catch (err: any) {
       console.error("Image Upload Helper Error:", err);
-      return null;
+      throw new Error(`Image Upload Failed: ${err.message}`);
     }
   }
 
   async function postToLinkedIn(postId: string) {
     const post = db.prepare("SELECT * FROM posts WHERE id = ?").get(postId) as any;
-    if (!post) return;
+    if (!post) throw new Error("Post not found.");
+
+    // Basic validation
+    if (!post.content && !post.image_url && !post.media_urls) {
+      db.prepare("UPDATE posts SET status = 'failed' WHERE id = ?").run(postId);
+      return { success: false, error: "Post cannot be empty. Please add text or media." };
+    }
 
     const user = db.prepare("SELECT access_token, linkedin_id FROM users WHERE id = ?").get(post.user_id) as any;
     if (!user || !user.access_token) {
       console.error(`No token found for user ${post.user_id}`);
       db.prepare("UPDATE posts SET status = 'failed' WHERE id = ?").run(postId);
-      return;
+      return { success: false, error: "Authentication expired. Please link your account again." };
     }
 
     try {
-      let assetUrn = null;
-      if (post.image_url && post.image_url.startsWith("data:image")) {
-        assetUrn = await uploadImageToLinkedIn(user.access_token, user.linkedin_id, post.image_url);
+      let mediaAssets: { urn: string, type: string }[] = [];
+      console.log(`Starting LinkedIn post for post ID: ${postId}`);
+
+      // Handle main image
+      if (post.image_url && post.image_url.startsWith("data:")) {
+        console.log("Uploading primary media...");
+        const urn = await uploadImageToLinkedIn(user.access_token, user.linkedin_id, post.image_url);
+        if (urn) mediaAssets.push({ urn, type: "IMAGE" });
       }
 
+      // Handle additional media (Carousel)
+      if (post.media_urls) {
+        try {
+          const extraUrls = JSON.parse(post.media_urls) as string[];
+          for (const url of extraUrls) {
+            console.log(`Uploading extra media item ${extraUrls.indexOf(url) + 1} of ${extraUrls.length}...`);
+            if (url.startsWith("data:image/")) {
+              const urn = await uploadImageToLinkedIn(user.access_token, user.linkedin_id, url);
+              if (urn) mediaAssets.push({ urn, type: "IMAGE" });
+            }
+            // Small delay to avoid hitting rate limits too fast during multiple uploads
+            await new Promise(r => setTimeout(r, 500));
+          }
+        } catch (e: any) {
+          console.error("Failed to process extra media URLs:", e);
+        }
+      }
+
+      console.log(`Total media assets prepared: ${mediaAssets.length}`);
+
+      // Construction of /rest/posts payload
       const payload: any = {
         author: `urn:li:person:${user.linkedin_id}`,
-        lifecycleState: "PUBLISHED",
-        specificContent: {
-          "com.linkedin.ugc.ShareContent": {
-            shareCommentary: { text: post.content },
-            shareMediaCategory: assetUrn ? "IMAGE" : "NONE",
-          },
+        commentary: post.content || "",
+        visibility: "PUBLIC",
+        distribution: {
+          feedDistribution: "MAIN_FEED",
+          targetEntities: [],
+          thirdPartyDistributionChannels: []
         },
-        visibility: { "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC" },
+        lifecycleState: "PUBLISHED"
       };
 
-      if (assetUrn) {
-        payload.specificContent["com.linkedin.ugc.ShareContent"].media = [
-          {
-            status: "READY",
-            description: { text: "Generated via LinkedIn Automate" },
-            media: assetUrn,
-            title: { text: "Design Preview" },
-          },
-        ];
+      if (mediaAssets.length > 1) {
+        payload.content = {
+          multiImage: {
+            images: mediaAssets.map(asset => ({
+              id: asset.urn.replace("urn:li:digitalmediaAsset:", "urn:li:image:")
+            }))
+          }
+        };
+      } else if (mediaAssets.length === 1) {
+        payload.content = {
+          image: {
+            id: mediaAssets[0].urn.replace("urn:li:digitalmediaAsset:", "urn:li:image:")
+          }
+        };
       }
 
-      const liRes = await fetch("https://api.linkedin.com/v2/ugcPosts", {
+      console.log("Sending final payload to LinkedIn (rest/posts):", JSON.stringify(payload, null, 2));
+
+      const liRes = await fetch("https://api.linkedin.com/rest/posts", {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${user.access_token}`,
           "Content-Type": "application/json",
+          "LinkedIn-Version": "202601",
           "X-Restli-Protocol-Version": "2.0.0",
         },
         body: JSON.stringify(payload),
@@ -172,11 +246,11 @@ async function startServer() {
 
       if (liRes.ok) {
         db.prepare("UPDATE posts SET status = 'posted' WHERE id = ?").run(postId);
-        console.log(`Successfully posted ${postId} to LinkedIn`);
+        console.log(`Successfully posted ${postId} to LinkedIn using rest/posts`);
         return { success: true };
       } else {
         const err = await liRes.json().catch(() => ({}));
-        console.error(`LinkedIn API Error for post ${postId}:`, err);
+        console.error(`LinkedIn API Error for post ${postId}:`, JSON.stringify(err, null, 2));
         db.prepare("UPDATE posts SET status = 'failed' WHERE id = ?").run(postId);
         return { success: false, error: err.message || "LinkedIn API rejected the post." };
       }
@@ -201,9 +275,9 @@ async function startServer() {
     // Use openid, profile, and email for basic info. 
     // w_member_social is for posting. 
     // r_member_social is removed as it often requires special approval and causes login errors if not authorized.
-    const scope = "openid profile email w_member_social"; 
+    const scope = "openid profile email w_member_social";
     const state = Math.random().toString(36).substring(7);
-    
+
     const params = new URLSearchParams({
       response_type: "code",
       client_id: process.env.LINKEDIN_CLIENT_ID || "",
@@ -218,7 +292,7 @@ async function startServer() {
   // LinkedIn OAuth Callback
   app.get("/auth/linkedin/callback", async (req, res) => {
     const { code, error, error_description } = req.query;
-    
+
     if (error) {
       return res.send(`
         <html>
@@ -231,7 +305,7 @@ async function startServer() {
         </html>
       `);
     }
-    
+
     try {
       // 1. Exchange code for access token
       const tokenResponse = await fetch("https://www.linkedin.com/oauth/v2/accessToken", {
@@ -297,28 +371,48 @@ async function startServer() {
 
   app.put("/api/posts/:id", (req, res) => {
     const { id } = req.params;
-    const { content, scheduled_at, is_recurring, recurrence_pattern, category, is_draft } = req.body;
-    
+    const { content, scheduled_at, image_url, thumbnail_url, media_urls, is_recurring, recurrence_pattern, category, is_draft } = req.body;
+
     try {
       db.prepare(`
         UPDATE posts 
         SET content = ?, 
             scheduled_at = ?, 
+            image_url = ?,
+            thumbnail_url = ?,
+            media_urls = ?,
             is_recurring = ?, 
             recurrence_pattern = ?, 
             category = ?, 
             is_draft = ? 
         WHERE id = ?
       `).run(
-        content, 
-        scheduled_at, 
-        is_recurring ? 1 : 0, 
-        recurrence_pattern, 
-        category, 
-        is_draft ? 1 : 0, 
+        content,
+        scheduled_at,
+        image_url,
+        thumbnail_url,
+        media_urls,
+        is_recurring ? 1 : 0,
+        recurrence_pattern,
+        category,
+        is_draft ? 1 : 0,
         id
       );
       res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/posts/:id/publish", async (req, res) => {
+    const { id } = req.params;
+    try {
+      const result = await postToLinkedIn(id);
+      if (result.success) {
+        res.json({ success: true });
+      } else {
+        res.status(400).json({ error: result.error });
+      }
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -335,19 +429,21 @@ async function startServer() {
   });
 
   app.post("/api/posts", async (req, res) => {
-    const { content, scheduled_at, image_url, immediate, is_recurring, recurrence_pattern, category, is_draft } = req.body;
+    const { content, scheduled_at, image_url, thumbnail_url, media_urls, immediate, is_recurring, recurrence_pattern, category, is_draft } = req.body;
     const id = Math.random().toString(36).substring(7);
-    
+
     db.prepare(`
-      INSERT INTO posts (id, user_id, content, scheduled_at, status, image_url, is_recurring, recurrence_pattern, category, is_draft)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO posts (id, user_id, content, scheduled_at, status, image_url, thumbnail_url, media_urls, is_recurring, recurrence_pattern, category, is_draft)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      id, 
-      "default_user", 
-      content, 
-      scheduled_at, 
-      immediate ? "posted" : "pending", 
+      id,
+      "default_user",
+      content,
+      scheduled_at,
+      immediate ? "posted" : "pending",
       image_url,
+      thumbnail_url,
+      media_urls,
       is_recurring ? 1 : 0,
       recurrence_pattern,
       category || "General",
@@ -408,10 +504,10 @@ async function startServer() {
         } catch (e) {
           err = { raw: text };
         }
-        
+
         console.error(`LinkedIn Post Analytics Error [Status ${status}]:`, JSON.stringify(err, null, 2));
-        
-        res.status(status).json({ 
+
+        res.status(status).json({
           error: err.message || "Failed to fetch post analytics",
           details: err,
           status: status
@@ -431,7 +527,7 @@ async function startServer() {
     try {
       const authorUrn = `urn:li:person:${user.linkedin_id}`;
       console.log(`Fetching LinkedIn posts for author: ${authorUrn}`);
-      
+
       // Fetch recent posts from LinkedIn using the modern /v2/posts API
       // author={urn}&q=author is the correct query pattern for this endpoint
       const liRes = await fetch(`https://api.linkedin.com/v2/posts?author=${encodeURIComponent(authorUrn)}&q=author&count=10`, {
@@ -454,9 +550,9 @@ async function startServer() {
         } catch (e) {
           err = { raw: text };
         }
-        
+
         console.error(`LinkedIn Fetch Posts Error [Status ${status}]:`, JSON.stringify(err, null, 2));
-        
+
         let errorMessage = "Failed to fetch posts from LinkedIn";
         if (status === 403) {
           errorMessage = "Permission denied. Please ensure 'Share on LinkedIn' and 'Sign In with LinkedIn' are enabled in your LinkedIn Developer Portal, and that you have granted 'r_member_social' scope if available.";
@@ -464,7 +560,7 @@ async function startServer() {
           errorMessage = "LinkedIn session expired. Please log out and log in again.";
         }
 
-        res.status(status).json({ 
+        res.status(status).json({
           error: err.message || errorMessage,
           details: err,
           status: status
@@ -498,7 +594,7 @@ async function startServer() {
     for (const post of pendingPosts) {
       console.log(`Scheduler: Attempting to auto-post: ${post.id}`);
       const result = await postToLinkedIn(post.id);
-      
+
       if (result.success && post.is_recurring) {
         // Schedule the next occurrence
         const nextDate = new Date(post.scheduled_at);
@@ -511,11 +607,11 @@ async function startServer() {
           INSERT INTO posts (id, user_id, content, scheduled_at, status, image_url, is_recurring, recurrence_pattern, category, is_draft)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
-          nextId, 
-          post.user_id, 
-          post.content, 
-          nextDate.toISOString(), 
-          'pending', 
+          nextId,
+          post.user_id,
+          post.content,
+          nextDate.toISOString(),
+          'pending',
           post.image_url,
           1,
           post.recurrence_pattern,
@@ -545,5 +641,13 @@ async function startServer() {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("Unhandled Rejection at:", promise, "reason:", reason);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception:", err);
+});
 
 startServer();
