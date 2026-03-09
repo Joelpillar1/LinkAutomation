@@ -1,29 +1,30 @@
 {
     "version": 2,
-    "builds": [
-        {
-            "src": "server.ts",
-            "use": "@vercel/node"
+    "functions": {
+        "server.ts": {
+            "runtime": "@vercel/node",
+            "memory": 1024,
+            "maxDuration": 10
         }
-    ],
-    "routes": [
-        {
-            "src": "/api/(.*)",
-            "dest": "server.ts"
-        },
-        {
-            "src": "/auth/(.*)",
-            "dest": "server.ts"
-        },
-        {
-            "src": "/(.*)",
-            "dest": "server.ts"
-        }
-    ],
+    },
     "crons": [
         {
             "path": "/api/cron/process-posts",
             "schedule": "* * * * *"
+        }
+    ],
+    "rewrites": [
+        {
+            "source": "/api/(.*)",
+            "destination": "/server.ts"
+        },
+        {
+            "source": "/auth/(.*)",
+            "destination": "/server.ts"
+        },
+        {
+            "source": "/(.*)",
+            "destination": "/server.ts"
         }
     ]
 }
