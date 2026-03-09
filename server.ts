@@ -10,8 +10,11 @@ const app = express();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+let isSchemaInitialized = false;
+
 // Initialize DB schema (for Vercel Postgres)
 async function initializeSchema() {
+  if (isSchemaInitialized) return;
   try {
     await sql`
       CREATE TABLE IF NOT EXISTS users (
@@ -42,16 +45,19 @@ async function initializeSchema() {
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
       );
     `;
+    isSchemaInitialized = true;
     console.log("Database schema initialized.");
   } catch (err) {
     console.error("Schema initialization failed:", err);
   }
 }
 
-// In local dev, we might still want to call this once
-if (process.env.NODE_ENV === "production") {
-  initializeSchema();
-}
+app.use(async (req, res, next) => {
+  if (process.env.NODE_ENV === "production" && !isSchemaInitialized) {
+    await initializeSchema();
+  }
+  next();
+});
 
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
