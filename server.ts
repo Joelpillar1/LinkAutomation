@@ -1,5 +1,4 @@
 import express, { Request, Response } from "express";
-import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
@@ -383,7 +382,10 @@ app.get("/api/analytics", async (req, res) => {
 
 // Vite/Static serve
 const distPath = path.join(process.cwd(), "dist");
+
 if (process.env.NODE_ENV !== "production") {
+  // Use dynamic import for vite to avoid loading it in production (Vercel)
+  const { createServer: createViteServer } = await import("vite");
   const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
   app.use(vite.middlewares);
 } else {
@@ -393,7 +395,7 @@ if (process.env.NODE_ENV !== "production") {
       res.sendFile(path.join(distPath, "index.html"), (err) => {
         if (err) {
           console.error("Static file error:", err);
-          res.status(404).send("Build output not found. Please run 'npm run build' first.");
+          res.status(404).send("Build output not found. Please ensure 'npm run build' ran successfully.");
         }
       });
     }
