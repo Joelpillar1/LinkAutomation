@@ -45,6 +45,16 @@ async function initializeSchema() {
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
       );
     `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS logs (
+        id SERIAL PRIMARY KEY,
+        user_id TEXT,
+        action TEXT,
+        message TEXT,
+        type TEXT,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
     isSchemaInitialized = true;
     console.log("Database schema initialized.");
   } catch (err) {
@@ -63,6 +73,16 @@ app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 // --- Helper Functions ---
+async function addLog(userId: string, action: string, message: string, type: 'info' | 'success' | 'error' = 'info') {
+  try {
+    await sql`
+      INSERT INTO logs (user_id, action, message, type)
+      VALUES (${userId}, ${action}, ${message}, ${type})
+    `;
+  } catch (err) {
+    console.error("Failed to add log:", err);
+  }
+}
 async function uploadImageToLinkedIn(accessToken: string, personUrn: string, base64Image: string) {
   try {
     const registerRes = await fetch("https://api.linkedin.com/v2/assets?action=registerUpload", {
@@ -190,14 +210,17 @@ async function postToLinkedIn(postId: string) {
 
     if (liRes.status === 201 || liRes.ok) {
       await sql`UPDATE posts SET status = 'posted' WHERE id = ${postId}`;
+      await addLog(post.user_id, "Posted to LinkedIn", `Successfully published: "${post.content.slice(0, 30)}..."`, "success");
       return { success: true };
     } else {
       const err = await liRes.json().catch(() => ({}));
       await sql`UPDATE posts SET status = 'failed' WHERE id = ${postId}`;
+      await addLog(post.user_id, "LinkedIn Post Failed", err.message || `Status ${liRes.status}`, "error");
       return { success: false, error: err.message || `LinkedIn error ${liRes.status}` };
     }
   } catch (err: any) {
     await sql`UPDATE posts SET status = 'failed' WHERE id = ${postId}`;
+    await addLog("default_user", "Fatal Post Error", err.message, "error");
     throw err;
   }
 }
@@ -245,6 +268,15 @@ app.get("/api/cron/process-posts", async (req, res) => {
 });
 
 app.get("/api/health", (req, res) => res.json({ status: "ok" }));
+
+app.get("/api/logs", async (req, res) => {
+  try {
+    const { rows } = await sql`SELECT * FROM logs ORDER BY created_at DESC LIMIT 20`;
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch logs" });
+  }
+});
 
 app.get("/api/auth/linkedin/url", (req, res) => {
   const protocol = req.headers["x-forwarded-proto"] || "http";
@@ -359,6 +391,12 @@ app.post("/api/posts", async (req, res) => {
       )
     `;
 
+    if (is_draft) {
+      await addLog('default_user', 'Draft Saved', `Draft: "${content.slice(0, 30)}..."`, 'info');
+    } else if (!immediate) {
+      await addLog('default_user', 'Post Scheduled', `Scheduled for ${new Date(scheduled_at).toLocaleString()}`, 'info');
+    }
+
     if (immediate) {
       const result = await postToLinkedIn(id);
       if (result.success) return res.json({ id, status: "posted" });
@@ -384,12 +422,26 @@ app.delete("/api/posts/:id", async (req, res) => {
 
 // Analytics mock
 app.get("/api/analytics", async (req, res) => {
-  res.json({
-    profileViews: 1284,
-    postImpressions: "42.5K",
-    newConnections: 156,
-    changes: { views: "+12%", impressions: "+18%", connections: "+5%" }
-  });
+  try {
+    const { rows: stats } = await sql`
+      SELECT 
+        COUNT(*) as total,
+        COUNT(*) FILTER (WHERE status = 'posted') as posted,
+        COUNT(*) FILTER (WHERE status = 'pending') as pending,
+        COUNT(*) FILTER (WHERE status = 'failed') as failed
+      FROM posts
+    `;
+
+    res.json({
+      profileViews: 1284, // Keep mock for now since we don't have real LI analytics yet
+      postImpressions: "42.5K",
+      newConnections: 156,
+      postStats: stats[0] || { total: 0, posted: 0, pending: 0, failed: 0 }
+    });
+  } catch (err) {
+    console.error("Analytics fetch error:", err);
+    res.status(500).json({ error: "Failed to fetch stats" });
+  }
 });
 
 // Vite/Static serve

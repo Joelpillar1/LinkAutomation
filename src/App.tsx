@@ -274,6 +274,8 @@ export default function App() {
   const [user, setUser] = useState<any>(null);
   const [livePosts, setLivePosts] = useState<any[]>([]);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [logs, setLogs] = useState<any[]>([]);
+  const [isLoadingLogs, setIsLoadingLogs] = useState(true);
 
   // Content Studio State
   const [topic, setTopic] = useState("");
@@ -456,6 +458,7 @@ export default function App() {
     fetchAnalytics();
     fetchUser();
     fetchLivePosts();
+    fetchLogs();
 
     // Listen for OAuth success
     const handleOAuth = (event: MessageEvent) => {
@@ -531,6 +534,21 @@ export default function App() {
       console.error("Live Posts Error:", err);
     } finally {
       setIsLoadingLivePosts(false);
+    }
+  };
+
+  const fetchLogs = async () => {
+    setIsLoadingLogs(true);
+    try {
+      const res = await fetch("/api/logs");
+      if (res.ok) {
+        const data = await res.json();
+        setLogs(data);
+      }
+    } catch (err) {
+      console.error("Logs Fetch Error:", err);
+    } finally {
+      setIsLoadingLogs(false);
     }
   };
 
@@ -1064,44 +1082,77 @@ export default function App() {
                 )}
               </div>
 
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <h3 className="text-lg font-bold mb-4">Automation Performance</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {isLoadingAnalytics ? (
+                    [1, 2, 3].map((i) => (
+                      <div key={i} className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                        <Skeleton className="h-4 w-20 mb-2" />
+                        <Skeleton className="h-8 w-32" />
+                      </div>
+                    ))
+                  ) : (
+                    <>
+                      <div className="bg-blue-50/50 p-4 rounded-xl border border-blue-100">
+                        <p className="text-blue-600 text-[10px] font-black uppercase tracking-widest mb-1">Scheduled</p>
+                        <h3 className="text-2xl font-black text-blue-700">{analytics?.postStats?.pending || 0}</h3>
+                      </div>
+                      <div className="bg-emerald-50/50 p-4 rounded-xl border border-emerald-100">
+                        <p className="text-emerald-600 text-[10px] font-black uppercase tracking-widest mb-1">Successfully Posted</p>
+                        <h3 className="text-2xl font-black text-emerald-700">{analytics?.postStats?.posted || 0}</h3>
+                      </div>
+                      <div className="bg-red-50/50 p-4 rounded-xl border border-red-100">
+                        <p className="text-red-600 text-[10px] font-black uppercase tracking-widest mb-1">Failed</p>
+                        <h3 className="text-2xl font-black text-red-700">{analytics?.postStats?.failed || 0}</h3>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="md:col-span-2 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                   <h4 className="font-bold flex items-center gap-2 mb-4">
                     <Linkedin className="w-5 h-5 text-[#0077B5]" />
-                    Real-time Activity
+                    Automation Logs
                   </h4>
-                  <div className="space-y-4">
-                    {isLoadingLivePosts ? (
+                  <div className="space-y-6">
+                    {isLoadingLogs ? (
                       [1, 2, 3].map((i) => (
-                        <div key={i} className="p-4 rounded-xl bg-slate-50/50 border border-slate-100 space-y-3">
-                          <Skeleton className="h-4 w-full" />
-                          <Skeleton className="h-4 w-2/3" />
-                          <div className="flex gap-4">
-                            <Skeleton className="h-3 w-12" />
-                            <Skeleton className="h-3 w-12" />
+                        <div key={i} className="flex gap-4">
+                          <Skeleton className="w-8 h-8 rounded-full" />
+                          <div className="flex-1 space-y-2">
+                            <Skeleton className="h-4 w-1/3" />
+                            <Skeleton className="h-3 w-2/3" />
                           </div>
                         </div>
                       ))
-                    ) : livePosts.length > 0 ? (
-                      livePosts.map((post, idx) => (
-                        <div key={idx} className="p-4 rounded-xl bg-slate-50 border border-slate-100">
-                          <p className="text-sm text-slate-700 line-clamp-2 mb-3">
-                            {post.text?.text || post.commentary || "Shared a post"}
-                          </p>
-                          <div className="flex items-center gap-4">
-                            <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500">
-                              <ThumbsUp className="w-3.5 h-3.5" />
-                              {post.stats?.likes || 0}
+                    ) : logs.length > 0 ? (
+                      logs.map((log, idx) => (
+                        <div key={idx} className="flex gap-4 relative">
+                          {idx !== logs.length - 1 && <div className="absolute left-4 top-8 bottom-[-24px] w-px bg-slate-100" />}
+                          <div className={cn(
+                            "w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 z-10",
+                            log.type === 'success' ? 'bg-emerald-50 text-emerald-500' :
+                              log.type === 'error' ? 'bg-red-50 text-red-500' : 'bg-blue-50 text-[#0077B5]'
+                          )}>
+                            {log.type === 'success' ? <CheckCircle2 className="w-4 h-4" /> :
+                              log.type === 'error' ? <AlertCircle className="w-4 h-4" /> : <Clock className="w-4 h-4" />}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between mb-0.5">
+                              <p className="text-sm font-bold text-slate-800">{log.action}</p>
+                              <span className="text-[10px] font-bold text-slate-400">
+                                {new Date(log.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </span>
                             </div>
-                            <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500">
-                              <MessageCircle className="w-3.5 h-3.5" />
-                              {post.stats?.comments || 0}
-                            </div>
+                            <p className="text-[11px] text-slate-500 line-clamp-2">{log.message}</p>
                           </div>
                         </div>
                       ))
                     ) : (
-                      <p className="text-center py-12 text-slate-400 text-sm">No recent activity detected.</p>
+                      <p className="text-center py-12 text-slate-400 text-sm">No automation activity logs yet.</p>
                     )}
                   </div>
                 </div>
