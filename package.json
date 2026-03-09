@@ -16,7 +16,6 @@
     "@types/pg": "^8.18.0",
     "@vercel/postgres": "^0.10.0",
     "@vitejs/plugin-react": "^5.0.4",
-    "better-sqlite3": "^12.4.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "dotenv": "^17.2.3",
