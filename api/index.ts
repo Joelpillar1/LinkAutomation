@@ -444,6 +444,42 @@ app.get("/api/analytics", async (req, res) => {
   }
 });
 
+// Publish existing post now
+app.post("/api/posts/:id/publish", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await postToLinkedIn(id);
+    if (result.success) {
+      res.json({ success: true });
+    } else {
+      res.status(400).json({ error: result.error });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetch live LinkedIn posts (Mock for now, or real if we have access)
+app.get("/api/linkedin/posts", async (req, res) => {
+  try {
+    const { rows: userRows } = await sql`SELECT access_token, linkedin_id FROM users WHERE id = 'default_user'`;
+    const user = userRows[0];
+    if (!user || !user.access_token) return res.status(401).json({ error: "Not authenticated" });
+
+    // For now, let's just return our own 'posted' items as a proxy for 'live' posts
+    // until we implement full history sync from LinkedIn API
+    const { rows: livePosts } = await sql`
+      SELECT * FROM posts 
+      WHERE status = 'posted' 
+      ORDER BY created_at DESC 
+      LIMIT 10
+    `;
+    res.json(livePosts);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch live posts" });
+  }
+});
+
 // Setup for local development
 if (process.env.NODE_ENV !== "production") {
   const startLocalServer = async () => {
