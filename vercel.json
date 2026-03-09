@@ -4,7 +4,8 @@
         "server.ts": {
             "runtime": "@vercel/node",
             "memory": 1024,
-            "maxDuration": 10
+            "maxDuration": 15,
+            "includeFiles": "dist/**"
         }
     },
     "crons": [
