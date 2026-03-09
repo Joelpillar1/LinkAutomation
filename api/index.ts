@@ -247,7 +247,9 @@ app.get("/api/cron/process-posts", async (req, res) => {
 app.get("/api/health", (req, res) => res.json({ status: "ok" }));
 
 app.get("/api/auth/linkedin/url", (req, res) => {
-  const redirectUri = `${process.env.APP_URL}/auth/linkedin/callback`;
+  const protocol = req.headers["x-forwarded-proto"] || "http";
+  const host = req.headers.host;
+  const redirectUri = `${protocol}://${host}/auth/linkedin/callback`;
   const scope = "openid profile email w_member_social r_member_social";
   const state = Math.random().toString(36).substring(7);
 
@@ -266,6 +268,10 @@ app.get("/auth/linkedin/callback", async (req, res) => {
   const { code, error, error_description } = req.query;
   if (error) return res.status(500).send(error_description as string);
 
+  const protocol = req.headers["x-forwarded-proto"] || "http";
+  const host = req.headers.host;
+  const redirectUri = `${protocol}://${host}/auth/linkedin/callback`;
+
   try {
     const tokenResponse = await fetch("https://www.linkedin.com/oauth/v2/accessToken", {
       method: "POST",
@@ -275,7 +281,7 @@ app.get("/auth/linkedin/callback", async (req, res) => {
         code: code as string,
         client_id: process.env.LINKEDIN_CLIENT_ID || "",
         client_secret: process.env.LINKEDIN_CLIENT_SECRET || "",
-        redirect_uri: `${process.env.APP_URL}/auth/linkedin/callback`,
+        redirect_uri: redirectUri,
       }),
     });
 
@@ -387,7 +393,7 @@ app.get("/api/analytics", async (req, res) => {
 });
 
 // Vite/Static serve
-const distPath = path.join(process.cwd(), "dist");
+const distPath = path.join(__dirname, "..", "dist");
 
 if (process.env.NODE_ENV !== "production") {
   // Use dynamic import for vite to avoid loading it in production (Vercel)
