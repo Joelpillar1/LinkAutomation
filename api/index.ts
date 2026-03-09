@@ -250,7 +250,7 @@ app.get("/api/auth/linkedin/url", (req, res) => {
   const protocol = req.headers["x-forwarded-proto"] || "http";
   const host = req.headers.host;
   const redirectUri = `${protocol}://${host}/auth/linkedin/callback`;
-  const scope = "openid profile email w_member_social r_member_social";
+  const scope = "openid profile email w_member_social";
   const state = Math.random().toString(36).substring(7);
 
   const params = new URLSearchParams({
