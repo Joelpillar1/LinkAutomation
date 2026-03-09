@@ -1,11 +1,5 @@
 {
     "version": 2,
-    "functions": {
-        "api/index.ts": {
-            "runtime": "@vercel/node",
-            "includeFiles": "dist/**"
-        }
-    },
     "crons": [
         {
             "path": "/api/cron/process-posts",
@@ -23,7 +17,7 @@
         },
         {
             "source": "/(.*)",
-            "destination": "/api/index.ts"
+            "destination": "/index.html"
         }
     ]
 }
