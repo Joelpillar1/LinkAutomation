@@ -447,28 +447,33 @@ app.get("/api/analytics", async (req, res) => {
 // Vite/Static serve
 const distPath = path.join(__dirname, "..", "dist");
 
-if (process.env.NODE_ENV !== "production") {
-  // Use dynamic import for vite to avoid loading it in production (Vercel)
-  const { createServer: createViteServer } = await import("vite");
-  const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
-  app.use(vite.middlewares);
-} else {
-  app.use(express.static(distPath));
-  app.get("*", (req, res) => {
-    if (!req.path.startsWith('/api')) {
-      res.sendFile(path.join(distPath, "index.html"), (err) => {
-        if (err) {
-          console.error("Static file error:", err);
-          res.status(404).send("Build output not found. Please ensure 'npm run build' ran successfully.");
-        }
-      });
-    }
-  });
+// Setup server
+async function startServer() {
+  if (process.env.NODE_ENV !== "production") {
+    // Use dynamic import for vite to avoid loading it in production (Vercel)
+    const { createServer: createViteServer } = await import("vite");
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
+    app.use(vite.middlewares);
+  } else {
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => {
+      if (!req.path.startsWith('/api')) {
+        res.sendFile(path.join(distPath, "index.html"), (err) => {
+          if (err) {
+            console.error("Static file error:", err);
+            res.status(404).send("Build output not found. Please ensure 'npm run build' ran successfully.");
+          }
+        });
+      }
+    });
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  }
 }
+
+startServer();
 
 export default app;
-
-if (process.env.NODE_ENV !== "production") {
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-}
