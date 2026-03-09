@@ -11,7 +11,7 @@
     "crons": [
         {
             "path": "/api/cron/process-posts",
-            "schedule": "* * * * *"
+            "schedule": "0 0 * * *"
         }
     ],
     "rewrites": [
