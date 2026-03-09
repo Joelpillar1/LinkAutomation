@@ -1,29 +1,68 @@
 import OpenAI from "openai";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "", dangerouslyAllowBrowser: true });
+const OPENAI_KEY = (typeof process !== 'undefined' && process.env) ? process.env.OPENAI_API_KEY : '';
+const openai = new OpenAI({ apiKey: OPENAI_KEY || "", dangerouslyAllowBrowser: true });
 
-export const generateLinkedInPost = async (topic: string, tone: string = "professional") => {
+export async function analyzeUserStyle(posts: string[]) {
+  const combinedPosts = posts.join("\n---\n");
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content: `You are a linguistics expert. Analyze the following LinkedIn posts and provide a concise set of "Style Guidelines" for how this person writes. 
+        Focus on: 
+        1. Sentence structure (short vs long).
+        2. Use of lists/bullets.
+        3. Tone (aggressive, helpful, witty, minimalist).
+        4. Specific formatting quirks (e.g., lots of white space).
+        
+        Keep it under 100 words.`
+      },
+      {
+        role: "user",
+        content: `Analyze these posts: \n\n${combinedPosts}`
+      }
+    ]
+  });
+  return response.choices[0].message.content || "";
+}
+
+export async function generateLinkedInPost(topic: string, options: { tone?: string, hookTemplate?: string, userStyle?: string } = {}) {
+  const { tone = "professional", hookTemplate, userStyle } = options;
+
+  let contentPrompt = `Generate a high-engaging LinkedIn post about ${topic}. The general tone should be ${tone}.`;
+
+  if (hookTemplate) {
+    contentPrompt += `\n\nUSE THIS SPECIFIC HOOK TEMPLATE FOR THE FIRST TWO LINES: "${hookTemplate}"`;
+  }
+
+  if (userStyle) {
+    contentPrompt += `\n\nMATCH THIS WRITING STYLE PERFECTLY: ${userStyle}`;
+  }
+
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
       {
         role: "user",
-        content: `Generate a high-engaging LinkedIn post about ${topic}. The tone should be ${tone}. 
+        content: `${contentPrompt}
     
     STRICT CONSTRAINTS:
     - DO NOT use any emojis.
     - DO NOT use em-dashes (—).
     - DO NOT use markdown bolding (**).
-    - Return ONLY the post content. No explanations, no introductory text, no conversational filler.
+    - Return ONLY the post content. No explanations, no introductory text.
+    - Use plenty of white space between paragraphs.
     
     Include relevant hashtags and a call to action at the end.`
       }
     ]
   });
   return response.choices[0].message.content || "";
-};
+}
 
-export const generateCommentReply = async (comment: string) => {
+export async function generateCommentReply(comment: string) {
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
@@ -40,9 +79,9 @@ export const generateCommentReply = async (comment: string) => {
     ]
   });
   return response.choices[0].message.content || "";
-};
+}
 
-export const generatePostDesign = async (content: string) => {
+export async function generatePostDesign(content: string) {
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     response_format: { type: "json_object" },
@@ -62,8 +101,8 @@ export const generatePostDesign = async (content: string) => {
     ]
   });
   return JSON.parse(response.choices[0].message.content || "{}");
-};
-export const analyzeBrainDump = async (dump: string) => {
+}
+export async function analyzeBrainDump(dump: string) {
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     response_format: { type: "json_object" },
@@ -88,4 +127,4 @@ export const analyzeBrainDump = async (dump: string) => {
     ]
   });
   return JSON.parse(response.choices[0].message.content || '{"posts": []}');
-};
+}
