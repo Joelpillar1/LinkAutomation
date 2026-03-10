@@ -938,7 +938,7 @@ export default function App() {
               <img
                 src="/logo.png"
                 alt="LinkAutomation Logo"
-                className="h-8 w-auto object-contain animate-in fade-in duration-300"
+                className="h-12 w-auto object-contain animate-in fade-in duration-300"
               />
             )}
           </div>
