@@ -906,7 +906,7 @@ export default function App() {
           <div className="mb-6 flex items-center justify-center">
             <img src="/logo.png" alt="LinkAutomation Logo" className="h-16 w-auto" />
           </div>
-          <h1 className="text-2xl font-bold text-slate-900 mb-2">Welcome to LinkAutomate</h1>
+          <h1 className="text-2xl font-bold text-slate-900 mb-2">Welcome to LinkAutomation</h1>
           <p className="text-slate-500 mb-8">Connect your LinkedIn account to start automating.</p>
           <button
             onClick={handleLogin}
@@ -927,16 +927,19 @@ export default function App() {
         isSidebarCollapsed ? "w-20" : "w-64"
       )}>
         <div className={cn("p-6 flex items-center mb-2", isSidebarCollapsed ? "flex-col gap-4 text-center" : "justify-between")}>
-          <div className="flex items-center gap-2 min-w-0">
-            <img
-              src="/favicon.png"
-              alt="Icon"
-              className={cn("rounded-lg flex-shrink-0 object-contain", isSidebarCollapsed ? "w-10 h-10" : "w-8 h-8")}
-            />
-            {!isSidebarCollapsed && (
-              <span className="text-xl font-bold tracking-tight text-[#0077B5] truncate animate-in fade-in duration-300">
-                LinkAutomation
-              </span>
+          <div className="flex items-center justify-center min-w-0">
+            {isSidebarCollapsed ? (
+              <img
+                src="/favicon.png"
+                alt="Icon"
+                className="w-10 h-10 rounded-lg flex-shrink-0 object-contain"
+              />
+            ) : (
+              <img
+                src="/logo.png"
+                alt="LinkAutomation Logo"
+                className="h-8 w-auto object-contain animate-in fade-in duration-300"
+              />
             )}
           </div>
           <button
